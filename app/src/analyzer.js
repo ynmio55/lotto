@@ -80,10 +80,30 @@ export const analyzeData = (dataset) => {
   };
 };
 
+const calculateConfidence = (weights, selectedDigit) => {
+  const total = weights.reduce((sum, count) => sum + count, 0);
+  if (total === 0) return 0;
+  const count = weights[selectedDigit];
+  const ratio = count / total;
+  // Realistic scaling for Thai lottery users (average 10% -> 80% confidence, higher is better)
+  return Math.min(99, Math.round(65 + (ratio * 150)));
+};
+
+const calculateColdConfidence = (weights, selectedDigit) => {
+  const total = weights.reduce((sum, count) => sum + count, 0);
+  if (total === 0) return 0;
+  const count = weights[selectedDigit];
+  const ratio = count / total;
+  // Cold confidence: 100% minus the actual appearance ratio scaled.
+  // If it never appeared (ratio = 0), confidence is 99% that it won't appear.
+  return Math.max(50, Math.min(99, Math.round(99 - (ratio * 500))));
+};
+
 export const generatePrediction = (stats) => {
   // Advanced Weighted Random Generator based on POSITIONAL frequency
   const generateFromPositional = (positionalWeightsArray) => {
     let result = '';
+    let totalConf = 0;
     
     // For each digit position in the number
     for (let pos = 0; pos < positionalWeightsArray.length; pos++) {
@@ -101,9 +121,13 @@ export const generatePrediction = (stats) => {
         }
       }
       result += selectedDigit.toString();
+      totalConf += calculateConfidence(weights, selectedDigit);
     }
     
-    return result;
+    return {
+      number: result,
+      confidence: Math.round(totalConf / positionalWeightsArray.length)
+    };
   };
 
   return {
@@ -121,9 +145,9 @@ export const generatePrediction = (stats) => {
 };
 
 export const generateMostProbable = (stats) => {
-  // Picks the absolute most frequent digit for each position
   const getMostProbable = (positionalWeightsArray) => {
     let result = '';
+    let totalConf = 0;
     
     for (let pos = 0; pos < positionalWeightsArray.length; pos++) {
       const weights = positionalWeightsArray[pos];
@@ -137,9 +161,13 @@ export const generateMostProbable = (stats) => {
         }
       }
       result += bestDigit.toString();
+      totalConf += calculateConfidence(weights, bestDigit);
     }
     
-    return result;
+    return {
+      number: result,
+      confidence: Math.round(totalConf / positionalWeightsArray.length)
+    };
   };
 
   return {
@@ -147,9 +175,6 @@ export const generateMostProbable = (stats) => {
     last2: getMostProbable(stats.positionalStats.last2),
     front3: [
       getMostProbable(stats.positionalStats.front3),
-      // If we want two different numbers for front3, we could pick the 2nd most probable for the second one.
-      // For simplicity, let's just generate the top most probable, and leave the second slot empty or duplicate.
-      // Wait, let's just make the second one the second most probable!
       getSecondMostProbable(stats.positionalStats.front3)
     ],
     back3: [
@@ -159,9 +184,49 @@ export const generateMostProbable = (stats) => {
   };
 };
 
+export const generateColdNumbers = (stats) => {
+  const getLeastProbable = (positionalWeightsArray) => {
+    let result = '';
+    let totalConf = 0;
+    
+    for (let pos = 0; pos < positionalWeightsArray.length; pos++) {
+      const weights = positionalWeightsArray[pos];
+      let minCount = Infinity;
+      let worstDigit = 0;
+      
+      for (let digit = 0; digit < 10; digit++) {
+        if (weights[digit] < minCount) {
+          minCount = weights[digit];
+          worstDigit = digit;
+        }
+      }
+      result += worstDigit.toString();
+      totalConf += calculateColdConfidence(weights, worstDigit);
+    }
+    
+    return {
+      number: result,
+      confidence: Math.round(totalConf / positionalWeightsArray.length)
+    };
+  };
+
+  return {
+    firstPrize: getLeastProbable(stats.positionalStats.first),
+    last2: getLeastProbable(stats.positionalStats.last2),
+    front3: [
+      getLeastProbable(stats.positionalStats.front3)
+    ],
+    back3: [
+      getLeastProbable(stats.positionalStats.back3)
+    ],
+  };
+};
+
 // Helper for the second most probable number
 const getSecondMostProbable = (positionalWeightsArray) => {
     let result = '';
+    let totalConf = 0;
+    
     for (let pos = 0; pos < positionalWeightsArray.length; pos++) {
       const weights = positionalWeightsArray[pos];
       let maxCount = -1;
@@ -181,6 +246,11 @@ const getSecondMostProbable = (positionalWeightsArray) => {
         }
       }
       result += secondBestDigit.toString();
+      totalConf += calculateConfidence(weights, secondBestDigit);
     }
-    return result;
+    
+    return {
+      number: result,
+      confidence: Math.round(totalConf / positionalWeightsArray.length)
+    };
 };

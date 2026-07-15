@@ -1,10 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
 import dataset from './data/dataset.json';
-import { analyzeData, generatePrediction, generateMostProbable } from './analyzer';
+import { analyzeData, generatePrediction, generateMostProbable, generateColdNumbers } from './analyzer';
 import './index.css';
 
 const MONTHS = [
-  { value: 'all', label: 'ทุกเดือน (ทั้งหมด)' },
+  { value: 'all', label: 'ทุกเดือน' },
   { value: '01', label: 'มกราคม' },
   { value: '02', label: 'กุมภาพันธ์' },
   { value: '03', label: 'มีนาคม' },
@@ -16,231 +16,327 @@ const MONTHS = [
   { value: '09', label: 'กันยายน' },
   { value: '10', label: 'ตุลาคม' },
   { value: '11', label: 'พฤศจิกายน' },
-  { value: '12', label: 'ธันวาคม' }
+  { value: '12', label: 'ธันวาคม' },
 ];
 
 const DRAWS = [
-  { value: 'all', label: 'ทุกงวด (ทั้งหมด)' },
-  { value: 'beginning', label: 'ต้นเดือน (วันที่ 1, 2)' },
-  { value: 'middle', label: 'กลางเดือน (วันที่ 16, 17)' },
-  { value: 'end', label: 'ปลายเดือน (วันที่ 30, 31)' }
+  { value: 'all', label: 'ทุกงวด' },
+  { value: 'beginning', label: 'ต้นเดือน (1, 2)' },
+  { value: 'middle', label: 'กลางเดือน (16, 17)' },
+  { value: 'end', label: 'ปลายเดือน (30, 31)' },
 ];
+
+const DAYS_OF_WEEK = [
+  { value: 'all', label: 'ทุกวัน' },
+  { value: '0', label: 'อาทิตย์' },
+  { value: '1', label: 'จันทร์' },
+  { value: '2', label: 'อังคาร' },
+  { value: '3', label: 'พุธ' },
+  { value: '4', label: 'พฤหัสบดี' },
+  { value: '5', label: 'ศุกร์' },
+  { value: '6', label: 'เสาร์' },
+];
+
+const getDayOfWeek = (dateStr) => {
+  const [d, m, yThai] = dateStr.split('/');
+  const yEng = parseInt(yThai) - 543;
+  const date = new Date(yEng, parseInt(m) - 1, parseInt(d));
+  return date.getDay().toString();
+};
+
+const getBadgeLabel = (score, isCold) => {
+  if (isCold) {
+    if (score >= 90) return { text: 'ดับสนิท', level: 'danger' };
+    if (score >= 80) return { text: 'ไม่ออกนานแล้ว', level: 'warning' };
+    return { text: 'ความถี่ต่ำ', level: 'neutral' };
+  }
+  if (score >= 90) return { text: 'ออกบ่อยมากที่สุด', level: 'success' };
+  if (score >= 80) return { text: 'ออกบ่อย', level: 'info' };
+  return { text: 'พอสมควร', level: 'neutral' };
+};
+
+function SelectField({ label, value, onChange, options }) {
+  return (
+    <div className="select-field">
+      <label className="select-label">{label}</label>
+      <select className="select-input" value={value} onChange={(e) => onChange(e.target.value)}>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function NumberCard({ title, dataObj, isCold, isLarge }) {
+  const badge = getBadgeLabel(dataObj.confidence, isCold);
+  return (
+    <div className={`number-card ${isCold ? 'number-card--cold' : 'number-card--hot'}`}>
+      <span className="number-card__label">{title}</span>
+      <span className={`number-card__num ${isLarge ? 'number-card__num--lg' : ''}`}>{dataObj.number}</span>
+      <span className={`badge badge--${badge.level}`}>{badge.text}</span>
+    </div>
+  );
+}
+
+function NumberCardMulti({ title, dataArray, isCold }) {
+  const badge = getBadgeLabel(dataArray[0]?.confidence, isCold);
+  return (
+    <div className={`number-card ${isCold ? 'number-card--cold' : 'number-card--hot'}`}>
+      <span className="number-card__label">{title}</span>
+      <div className="number-card__multi">
+        {dataArray.map((d, i) => (
+          <div key={i} className="number-card__multi-item">
+            <span className="number-card__num">{d.number}</span>
+          </div>
+        ))}
+      </div>
+      <span className={`badge badge--${badge.level}`}>{badge.text}</span>
+    </div>
+  );
+}
+
+function StatBar({ label, count, max, accent }) {
+  const pct = Math.min(100, Math.round((count / max) * 100));
+  return (
+    <div className="stat-bar-row">
+      <span className="stat-bar-label">{label}</span>
+      <div className="stat-bar-track">
+        <div className={`stat-bar-fill ${accent ? 'stat-bar-fill--accent' : ''}`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="stat-bar-count">{count}</span>
+    </div>
+  );
+}
 
 function App() {
   const [stats, setStats] = useState(null);
-  const [prediction, setPrediction] = useState(null);
-  const [predictionType, setPredictionType] = useState(''); // 'random' or 'probable'
+  const [predictions, setPredictions] = useState(null);
+  const [isCalculating, setIsCalculating] = useState(false);
+
   const [selectedMonth, setSelectedMonth] = useState('all');
   const [selectedDraw, setSelectedDraw] = useState('all');
+  const [selectedDay, setSelectedDay] = useState('all');
 
-  // Filter dataset based on selected month and draw (up to 15 years of data)
   const filteredDataset = useMemo(() => {
-    return dataset.filter(draw => {
+    return dataset.filter((draw) => {
       const [day, month] = draw.date.split('/');
-      
       const monthMatch = selectedMonth === 'all' || month === selectedMonth;
-      
       let drawMatch = true;
       if (selectedDraw === 'beginning') drawMatch = day === '01' || day === '02';
       else if (selectedDraw === 'middle') drawMatch = day === '16' || day === '17';
-      else if (selectedDraw === 'end') drawMatch = day === '30' || day === '31' || day === '28' || day === '29';
-      
-      return monthMatch && drawMatch;
+      else if (selectedDraw === 'end') drawMatch = ['28', '29', '30', '31'].includes(day);
+      const drawDay = getDayOfWeek(draw.date);
+      const dayMatch = selectedDay === 'all' || drawDay === selectedDay;
+      return monthMatch && drawMatch && dayMatch;
     });
-  }, [selectedMonth, selectedDraw]);
+  }, [selectedMonth, selectedDraw, selectedDay]);
 
   useEffect(() => {
     const analysis = analyzeData(filteredDataset);
     setStats(analysis);
-    setPrediction(null); // Reset prediction when filter changes
+    setPredictions(null);
   }, [filteredDataset]);
 
-  const handlePredictRandom = () => {
-    if (stats) {
-      setPrediction(generatePrediction(stats));
-      setPredictionType('random');
-    }
+  const handlePredict = () => {
+    if (!stats || stats.totalRecords === 0) return;
+    setIsCalculating(true);
+    setPredictions(null);
+    setTimeout(() => {
+      setPredictions({
+        topPick: generateMostProbable(stats),
+        randomPick: generatePrediction(stats),
+        coldPick: generateColdNumbers(stats),
+      });
+      setIsCalculating(false);
+    }, 1600);
   };
 
-  const handlePredictMostProbable = () => {
-    if (stats) {
-      setPrediction(generateMostProbable(stats));
-      setPredictionType('probable');
-    }
-  };
+  const maxDigitCount = stats ? stats.digitFrequencies[0]?.count || 1 : 1;
+  const maxLast2Count = stats ? (stats.last2Frequencies[0]?.[1] || 1) : 1;
 
   return (
-    <div className="app-container">
-      <h1>ระบบวิเคราะห์หวยไทย BY MIO1</h1>
+    <div className="page">
 
-      <div className="filter-container glass-panel" style={{ marginBottom: '2rem', textAlign: 'center' }}>
-        <h3 style={{ marginBottom: '1rem', color: 'var(--primary-color)' }}>
-          <span style={{ marginRight: '8px' }}>📅</span>
-          เลือกเดือนเพื่อวิเคราะห์สถิติ (ย้อนหลัง 15 ปี)
-        </h3>
-        <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
-          <select
-            className="month-select"
-            value={selectedMonth}
-            onChange={(e) => setSelectedMonth(e.target.value)}
-            style={{
-              padding: '10px 20px',
-              fontSize: '1rem',
-              borderRadius: '8px',
-              border: '1px solid var(--primary-color)',
-              backgroundColor: 'rgba(0,0,0,0.5)',
-              color: 'white',
-              cursor: 'pointer',
-              outline: 'none',
-              minWidth: '200px'
-            }}
-          >
-            {MONTHS.map(m => (
-              <option key={m.value} value={m.value}>{m.label}</option>
-            ))}
-          </select>
-
-          <select
-            className="draw-select"
-            value={selectedDraw}
-            onChange={(e) => setSelectedDraw(e.target.value)}
-            style={{
-              padding: '10px 20px',
-              fontSize: '1rem',
-              borderRadius: '8px',
-              border: '1px solid var(--primary-color)',
-              backgroundColor: 'rgba(0,0,0,0.5)',
-              color: 'white',
-              cursor: 'pointer',
-              outline: 'none',
-              minWidth: '200px'
-            }}
-          >
-            {DRAWS.map(d => (
-              <option key={d.value} value={d.value}>{d.label}</option>
-            ))}
-          </select>
+      {/* ── NAV ── */}
+      <header className="nav">
+        <div className="nav__inner container">
+          <span className="nav__brand">LottoStat</span>
+          <span className="nav__tagline">วิเคราะห์สลากฯ ด้วยข้อมูลสถิติ</span>
         </div>
-        <p style={{ marginTop: '1rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-          ข้อมูลที่ใช้ประมวลผล: {filteredDataset.length} งวด
-        </p>
-      </div>
+      </header>
 
-      {stats && (
-        <div className="dashboard-grid">
-          <div className="glass-panel">
-            <h2>เลขมาแรง 🔥</h2>
-            {stats.digitFrequencies.slice(0, 10).map((item, index) => (
-              <div key={index} className="stat-item">
-                <span className="stat-digit">{item.digit}</span>
-                <span className="stat-count">พบ {item.count} ครั้ง</span>
-              </div>
-            ))}
+      <main className="container main">
+
+        {/* ── HERO ── */}
+        <section className="hero">
+          <h1 className="hero__title">วิเคราะห์หวยไทย<br />ด้วยสถิติ 15 ปี</h1>
+          <p className="hero__sub">เลือกเงื่อนไขที่ต้องการ แล้วให้ระบบคัดกรองตัวเลขจากฐานข้อมูลย้อนหลัง {dataset.length} งวด</p>
+          <div className="hero__chips">
+            <span className="chip">{dataset.length} งวด</span>
+            <span className="chip">15 ปีย้อนหลัง</span>
+            <span className="chip">3 วิธีวิเคราะห์</span>
           </div>
+        </section>
 
-          <div className="glass-panel">
-            <h2>เลขท้าย 2 ตัวออกบ่อย 🎯</h2>
-            {stats.last2Frequencies.slice(0, 10).map((item, index) => (
-              <div key={index} className="stat-item">
-                <span className="stat-digit">{item[0]}</span>
-                <span className="stat-count">{item[1]} งวด</span>
-              </div>
-            ))}
+        {/* ── FILTER ── */}
+        <section className="card filter-section">
+          <div className="section-label">กรองข้อมูล</div>
+          <div className="filter-grid">
+            <SelectField label="เดือน" value={selectedMonth} onChange={setSelectedMonth} options={MONTHS} />
+            <SelectField label="งวด" value={selectedDraw} onChange={setSelectedDraw} options={DRAWS} />
+            <SelectField label="เลขกำลังวัน" value={selectedDay} onChange={setSelectedDay} options={DAYS_OF_WEEK} />
           </div>
-        </div>
-      )}
+          <div className="filter-meta">
+            ใช้ข้อมูล <strong>{filteredDataset.length}</strong> งวด จากทั้งหมด {dataset.length} งวด
+          </div>
+        </section>
 
-      <div className="glass-panel" style={{ textAlign: 'center', marginTop: '2rem' }}>
-        <h2>สุ่มเลขนำโชค / คัดเลขเด็ด 🔮</h2>
-        <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
-          ค้นหาเลขเด็ดจากสถิติความถี่ {selectedMonth !== 'all' ? `(เฉพาะเดือน${MONTHS.find(m => m.value === selectedMonth)?.label})` : ''} {selectedDraw !== 'all' ? `(${DRAWS.find(d => d.value === selectedDraw)?.label})` : ''}
-        </p>
-
-        <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap', marginBottom: '1rem' }}>
-          <button
-            className="btn"
-            style={{ backgroundColor: 'var(--primary-color)' }}
-            onClick={handlePredictMostProbable}
-          >
-            ⭐ เลขน่าจะเป็นสูงสุดต่องวดที่เลือก
-          </button>
-          <button
-            className="btn"
-            style={{ backgroundColor: '#6c5ce7' }}
-            onClick={handlePredictRandom}
-          >
-            🎲 สุ่มเรื่อยๆ ตามความน่าจะเป็น
-          </button>
-        </div>
-
-        {prediction && (
-          <div className="prediction-results">
-            {predictionType === 'probable' && (
-              <div style={{ marginBottom: '1rem', color: '#ffb8b8', fontSize: '0.9rem' }}>
-                * นี่คือชุดตัวเลขที่เกิดจากการประกอบกันของ "ตัวเลขที่ออกบ่อยที่สุดในแต่ละหลัก" ของงวดที่คุณเลือก
-              </div>
-            )}
-            {predictionType === 'random' && (
-              <div style={{ marginBottom: '1rem', color: '#81ecec', fontSize: '0.9rem' }}>
-                * นี่คือชุดตัวเลขที่สุ่มขึ้นมา โดยอิงน้ำหนักจากความน่าจะเป็น (เลขที่ออกบ่อยมีโอกาสสุ่มโดนมากกว่า)
-              </div>
-            )}
-            <div className="prediction-prize">
-              <h3>รางวัลที่ 1 (6 ตัว)</h3>
-              <div className="prediction-number">{prediction.firstPrize}</div>
+        {/* ── ANALYZE BUTTON ── */}
+        <section className="analyze-section">
+          {filteredDataset.length === 0 ? (
+            <div className="empty-state">
+              <div className="empty-state__icon">—</div>
+              <p className="empty-state__text">ไม่พบข้อมูลในเงื่อนไขที่เลือก กรุณาเปลี่ยนตัวกรอง</p>
             </div>
-            <div className="dashboard-grid" style={{ marginTop: '1rem', gap: '1rem' }}>
-              <div className="prediction-prize">
-                <h3>เลขท้าย 2 ตัว</h3>
-                <div className="prediction-number" style={{ fontSize: '2rem' }}>{prediction.last2}</div>
-              </div>
-              <div className="prediction-prize">
-                <h3>เลขหน้า 3 ตัว</h3>
-                <div className="prediction-number" style={{ fontSize: '1.5rem', letterSpacing: '2px' }}>
-                  {prediction.front3.join(' - ')}
+          ) : (
+            <button
+              className={`btn-analyze ${isCalculating ? 'btn-analyze--loading' : ''}`}
+              onClick={handlePredict}
+              disabled={isCalculating}
+              aria-label="เริ่มวิเคราะห์สถิติ"
+            >
+              {isCalculating ? (
+                <><span className="spin" aria-hidden="true" /> กำลังวิเคราะห์...</>
+              ) : (
+                'วิเคราะห์สถิติ'
+              )}
+            </button>
+          )}
+        </section>
+
+        {/* ── RESULTS ── */}
+        {predictions && !isCalculating && (
+          <div className="results fade-in">
+
+            {/* Top Pick */}
+            <section className="card result-section">
+              <div className="result-section__header">
+                <div>
+                  <div className="section-label">ชุดเต็ง — Top Pick</div>
+                  <p className="result-section__desc">ตัวเลขที่มีสถิติออกบ่อยที่สุดในแต่ละตำแหน่ง</p>
                 </div>
+                <span className="result-tag result-tag--hot">สถิติสูงสุด</span>
               </div>
-              <div className="prediction-prize">
-                <h3>เลขท้าย 3 ตัว</h3>
-                <div className="prediction-number" style={{ fontSize: '1.5rem', letterSpacing: '2px' }}>
-                  {prediction.back3.join(' - ')}
+              <div className="number-grid">
+                <NumberCard title="รางวัลที่ 1" dataObj={predictions.topPick.firstPrize} isLarge />
+                <NumberCard title="เลขท้าย 2 ตัว" dataObj={predictions.topPick.last2} />
+                <NumberCardMulti title="เลขหน้า 3 ตัว" dataArray={predictions.topPick.front3} />
+                <NumberCardMulti title="เลขท้าย 3 ตัว" dataArray={predictions.topPick.back3} />
+              </div>
+            </section>
+
+            {/* AI Random */}
+            <section className="card result-section">
+              <div className="result-section__header">
+                <div>
+                  <div className="section-label">ชุดสุ่ม — AI Weighted Random</div>
+                  <p className="result-section__desc">สุ่มโดยให้น้ำหนักกับตัวเลขที่มีความถี่สูงกว่า</p>
                 </div>
+                <span className="result-tag result-tag--neutral">สุ่มตามสถิติ</span>
               </div>
-            </div>
+              <div className="number-grid number-grid--2">
+                <NumberCard title="รางวัลที่ 1" dataObj={predictions.randomPick.firstPrize} isLarge />
+                <NumberCard title="เลขท้าย 2 ตัว" dataObj={predictions.randomPick.last2} />
+              </div>
+            </section>
+
+            {/* Cold Numbers */}
+            <section className="card result-section result-section--cold">
+              <div className="result-section__header">
+                <div>
+                  <div className="section-label">เลขดับ — Numbers to Avoid</div>
+                  <p className="result-section__desc">ตัวเลขที่มีสถิติออกน้อยที่สุด ควรหลีกเลี่ยง</p>
+                </div>
+                <span className="result-tag result-tag--cold">ความถี่ต่ำ</span>
+              </div>
+              <div className="number-grid number-grid--2">
+                <NumberCard title="รางวัลที่ 1" dataObj={predictions.coldPick.firstPrize} isCold />
+                <NumberCard title="เลขท้าย 2 ตัว" dataObj={predictions.coldPick.last2} isCold />
+              </div>
+            </section>
+
+            <p className="disclaimer">
+              หมายเหตุ: ตัวเลขข้างต้นคำนวณจากสถิติความถี่ในอดีตเท่านั้น ไม่ใช่การการันตีหรือโอกาสในการถูกรางวัล โปรดใช้วิจารณญาณในการตัดสินใจ
+            </p>
           </div>
         )}
-      </div>
 
-      <div className="glass-panel" style={{ marginTop: '2rem' }}>
-        <h2>สถิติผลสลากย้อนหลัง 📚</h2>
-        <div style={{ overflowX: 'auto' }}>
-          <table className="history-table">
-            <thead>
-              <tr>
-                <th>วันที่</th>
-                <th>รางวัลที่ 1</th>
-                <th>เลขท้าย 2 ตัว</th>
-                <th>เลขหน้า 3 ตัว</th>
-                <th>เลขท้าย 3 ตัว</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredDataset.slice(0, 50).map((draw, index) => (
-                <tr key={index}>
-                  <td>{draw.date}</td>
-                  <td style={{ color: 'var(--primary-color)', fontWeight: 'bold' }}>{draw.first}</td>
-                  <td>{draw.last2}</td>
-                  <td>{draw.front3.join(', ')}</td>
-                  <td>{draw.back3.join(', ')}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: '1rem', fontSize: '0.875rem' }}>
-            แสดงผลสูงสุด 50 งวดล่าสุด จากทั้งหมด {filteredDataset.length} งวด
-          </p>
+        {/* ── RAW STATS ── */}
+        {stats && stats.totalRecords > 0 && (
+          <section className="card stats-section">
+            <div className="section-label">ภาพรวมสถิติ</div>
+            <div className="stats-grid">
+              <div>
+                <h3 className="stats-title">ตัวเลขที่ออกบ่อยที่สุด</h3>
+                <div className="stat-bar-list">
+                  {stats.digitFrequencies.slice(0, 8).map((item) => (
+                    <StatBar key={item.digit} label={`เลข ${item.digit}`} count={item.count} max={maxDigitCount} />
+                  ))}
+                </div>
+              </div>
+              <div>
+                <h3 className="stats-title">เลขท้าย 2 ตัวออกบ่อย</h3>
+                <div className="stat-bar-list">
+                  {stats.last2Frequencies.slice(0, 8).map(([num, count]) => (
+                    <StatBar key={num} label={num} count={count} max={maxLast2Count} accent />
+                  ))}
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* ── HISTORY TABLE ── */}
+        {stats && filteredDataset.length > 0 && (
+          <section className="card">
+            <div className="section-label">ผลสลากย้อนหลัง</div>
+            <p className="table-meta">แสดง {Math.min(50, filteredDataset.length)} งวดล่าสุด จากทั้งหมด {filteredDataset.length} งวด</p>
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>วันที่</th>
+                    <th>รางวัลที่ 1</th>
+                    <th>ท้าย 2 ตัว</th>
+                    <th>หน้า 3 ตัว</th>
+                    <th>ท้าย 3 ตัว</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredDataset.slice(0, 50).map((draw, i) => (
+                    <tr key={i}>
+                      <td className="td-date">{draw.date}</td>
+                      <td className="td-first">{draw.first}</td>
+                      <td>{draw.last2}</td>
+                      <td className="td-small">{draw.front3.join(', ')}</td>
+                      <td className="td-small">{draw.back3.join(', ')}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+      </main>
+
+      <footer className="footer">
+        <div className="container">
+          <span>LottoStat — วิเคราะห์เพื่อประกอบการตัดสินใจ ไม่ใช่การการันตีผล</span>
         </div>
-      </div>
+      </footer>
+
     </div>
   );
 }
