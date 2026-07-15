@@ -19,20 +19,35 @@ const MONTHS = [
   { value: '12', label: 'ธันวาคม' }
 ];
 
+const DRAWS = [
+  { value: 'all', label: 'ทุกงวด (ทั้งหมด)' },
+  { value: 'beginning', label: 'ต้นเดือน (วันที่ 1, 2)' },
+  { value: 'middle', label: 'กลางเดือน (วันที่ 16, 17)' },
+  { value: 'end', label: 'ปลายเดือน (วันที่ 30, 31)' }
+];
+
 function App() {
   const [stats, setStats] = useState(null);
   const [prediction, setPrediction] = useState(null);
   const [predictionType, setPredictionType] = useState(''); // 'random' or 'probable'
   const [selectedMonth, setSelectedMonth] = useState('all');
+  const [selectedDraw, setSelectedDraw] = useState('all');
 
-  // Filter dataset based on selected month (up to 15 years of data)
+  // Filter dataset based on selected month and draw (up to 15 years of data)
   const filteredDataset = useMemo(() => {
-    if (selectedMonth === 'all') return dataset;
     return dataset.filter(draw => {
-      const [, month] = draw.date.split('/');
-      return month === selectedMonth;
+      const [day, month] = draw.date.split('/');
+      
+      const monthMatch = selectedMonth === 'all' || month === selectedMonth;
+      
+      let drawMatch = true;
+      if (selectedDraw === 'beginning') drawMatch = day === '01' || day === '02';
+      else if (selectedDraw === 'middle') drawMatch = day === '16' || day === '17';
+      else if (selectedDraw === 'end') drawMatch = day === '30' || day === '31' || day === '28' || day === '29';
+      
+      return monthMatch && drawMatch;
     });
-  }, [selectedMonth]);
+  }, [selectedMonth, selectedDraw]);
 
   useEffect(() => {
     const analysis = analyzeData(filteredDataset);
@@ -63,26 +78,49 @@ function App() {
           <span style={{ marginRight: '8px' }}>📅</span>
           เลือกเดือนเพื่อวิเคราะห์สถิติ (ย้อนหลัง 15 ปี)
         </h3>
-        <select
-          className="month-select"
-          value={selectedMonth}
-          onChange={(e) => setSelectedMonth(e.target.value)}
-          style={{
-            padding: '10px 20px',
-            fontSize: '1rem',
-            borderRadius: '8px',
-            border: '1px solid var(--primary-color)',
-            backgroundColor: 'rgba(0,0,0,0.5)',
-            color: 'white',
-            cursor: 'pointer',
-            outline: 'none',
-            minWidth: '200px'
-          }}
-        >
-          {MONTHS.map(m => (
-            <option key={m.value} value={m.value}>{m.label}</option>
-          ))}
-        </select>
+        <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+          <select
+            className="month-select"
+            value={selectedMonth}
+            onChange={(e) => setSelectedMonth(e.target.value)}
+            style={{
+              padding: '10px 20px',
+              fontSize: '1rem',
+              borderRadius: '8px',
+              border: '1px solid var(--primary-color)',
+              backgroundColor: 'rgba(0,0,0,0.5)',
+              color: 'white',
+              cursor: 'pointer',
+              outline: 'none',
+              minWidth: '200px'
+            }}
+          >
+            {MONTHS.map(m => (
+              <option key={m.value} value={m.value}>{m.label}</option>
+            ))}
+          </select>
+
+          <select
+            className="draw-select"
+            value={selectedDraw}
+            onChange={(e) => setSelectedDraw(e.target.value)}
+            style={{
+              padding: '10px 20px',
+              fontSize: '1rem',
+              borderRadius: '8px',
+              border: '1px solid var(--primary-color)',
+              backgroundColor: 'rgba(0,0,0,0.5)',
+              color: 'white',
+              cursor: 'pointer',
+              outline: 'none',
+              minWidth: '200px'
+            }}
+          >
+            {DRAWS.map(d => (
+              <option key={d.value} value={d.value}>{d.label}</option>
+            ))}
+          </select>
+        </div>
         <p style={{ marginTop: '1rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
           ข้อมูลที่ใช้ประมวลผล: {filteredDataset.length} งวด
         </p>
@@ -115,7 +153,7 @@ function App() {
       <div className="glass-panel" style={{ textAlign: 'center', marginTop: '2rem' }}>
         <h2>สุ่มเลขนำโชค / คัดเลขเด็ด 🔮</h2>
         <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
-          ค้นหาเลขเด็ดจากสถิติความถี่ {selectedMonth !== 'all' ? `(เฉพาะเดือน${MONTHS.find(m => m.value === selectedMonth)?.label})` : ''}
+          ค้นหาเลขเด็ดจากสถิติความถี่ {selectedMonth !== 'all' ? `(เฉพาะเดือน${MONTHS.find(m => m.value === selectedMonth)?.label})` : ''} {selectedDraw !== 'all' ? `(${DRAWS.find(d => d.value === selectedDraw)?.label})` : ''}
         </p>
 
         <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap', marginBottom: '1rem' }}>
@@ -124,14 +162,14 @@ function App() {
             style={{ backgroundColor: 'var(--primary-color)' }}
             onClick={handlePredictMostProbable}
           >
-            ⭐ คัดเน้นๆ (สถิติสูงสุด)
+            ⭐ เลขน่าจะเป็นสูงสุดต่องวดที่เลือก
           </button>
           <button
             className="btn"
             style={{ backgroundColor: '#6c5ce7' }}
             onClick={handlePredictRandom}
           >
-            🎲 สุ่มตามความน่าจะเป็น
+            🎲 สุ่มเรื่อยๆ ตามความน่าจะเป็น
           </button>
         </div>
 
@@ -139,7 +177,7 @@ function App() {
           <div className="prediction-results">
             {predictionType === 'probable' && (
               <div style={{ marginBottom: '1rem', color: '#ffb8b8', fontSize: '0.9rem' }}>
-                * นี่คือชุดตัวเลขที่เกิดจากการประกอบกันของ "ตัวเลขที่ออกบ่อยที่สุดในแต่ละหลัก" ตลอด 15 ปี
+                * นี่คือชุดตัวเลขที่เกิดจากการประกอบกันของ "ตัวเลขที่ออกบ่อยที่สุดในแต่ละหลัก" ของงวดที่คุณเลือก
               </div>
             )}
             {predictionType === 'random' && (
